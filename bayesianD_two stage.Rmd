@@ -1,0 +1,253 @@
+---
+title: "Untitled"
+author: '7105018040'
+date: "2018年3月3日"
+output: html_document
+---
+```{r}
+source_rmd <- function(file, local = FALSE, ...){
+  options(knitr.duplicate.label = 'allow')
+
+  tempR <- tempfile(tmpdir = ".", fileext = ".R")
+  on.exit(unlink(tempR))
+  knitr::purl(file, output=tempR, quiet = TRUE)
+  
+  envir <- globalenv()
+  source(tempR, local = envir, ...)
+}
+Sys.setlocale('LC_ALL','C')
+source_rmd("C:/Users/Administrator/Dropbox/paper/bayesianD_function.Rmd")
+```
+
+
+
+1.use Z replace potential term
+
+需要全因子設計
+
+並找到Z 與 potential terms 的關係
+
+```{r}
+
+index <- c(-1,0,1)   #3levels
+
+x <- matrix(0,3^3,3)
+l <- 1
+for(i in c(-1,0,1)){
+  for(j in c(-1,0,1)){
+    for(k in c(-1,0,1)){
+      x[l,1] <- i  
+      x[l,2] <- j
+      x[l,3] <- k
+      l <- l + 1
+    }
+  }
+}
+# now x is numbers of factorial design
+
+xpri <- cbind(1,x[,1:2],x[,1]^2)
+xpot <- cbind(x[,3], x[,1]*x[,2], x[,1]*x[,3], x[,2]*x[,3])
+alpha <- as.matrix(lm(xpot~xpri[,2:4])$coefficients)
+R <- xpot-xpri%*%alpha
+Z <- R/(max(R)-min(R))
+
+#checkt(xpri) %*% z
+```
+
+2.使用座標轉換函數找尋first stage bayesian D design
+  做一萬次~3萬次
+
+```{r}
+#coordinate exchange to find first stage design matrix
+find.X1 <- function(n){
+  m <-  matrix(sample(c(-1,0,1),replace = T,30),10)
+  temp <- compare(m)
+  z0 <- temp[[1]]
+  X0 <- temp[[2]]
+  D0 <- temp[[3]]
+  
+   for(i in 1:n){
+     if(i%%100 ==0){print(D0)}
+       m <-  matrix(sample(c(-1,0,1),replace = T,30),10)
+       temp <- compare(m)
+       z <- temp[[1]]
+       X <- temp[[2]]
+       D <- temp[[3]]
+         if(D >D0){
+         D0 <- D
+         X0 <- X
+         z0 <- z
+         }
+     }
+  return(list(z0,X0,D0))
+}
+#find.X1(10000)
+```
+
+```{r}
+#simulation
+
+library(mvtnorm)
+#A <- matrix(c(1,1,1,-1,0,-1,-1,-1,0,1,-1,1,1,1,1,-1,1,-1,-1,-1,-1,1,-1,1,1,1,-1,-1,1,1),10)
+A <- matrix(c(-1,0,1,-1,1,-1,0,1,-1,1,-1,-1,-1,-1,-1,1,1,1,1,1,-1,-1,-1,1,1,-1,-1,-1,1,1),10)
+
+X.1.i <- get.Xi(A)
+
+b <- matrix(c(50,9.2,11.7,14.4),4)
+
+X0 <- X.1.i[[1]]
+
+mu <- X0 %*% b
+
+set.seed(12)
+y1 <- t(rmvnorm(1,mu,diag(10)))
+
+pai <- 1/3
+
+b0.hat <- solve(t(X0) %*% X0) %*% t(X0) %*% y1
+
+S.b0 <- t(y1 - X0 %*% b0.hat) %*% (y1 - X0 %*% b0.hat)
+```
+
+3.有了一個觀測值，我們可以用tau.hat更新tau 
+
+```{r}
+#find tau
+
+tau <- seq(1e-6,5.1,by=1)
+tau.pdf <- c()
+
+for(i in 1:length(tau)){
+  
+  Ti <- list(generate.Ti(4,0)/(tau[i]^2),generate.Ti(4,1)/(tau[i]^2),generate.Ti(4,1)/(tau[i]^2),generate.Ti(4,1)/(tau[i]^2),generate.Ti(4,1)/(tau[i]^2),
+             generate.Ti(4,2)/(tau[i]^2),generate.Ti(4,2)/(tau[i]^2),generate.Ti(4,2)/(tau[i]^2),generate.Ti(4,2)/(tau[i]^2),generate.Ti(4,2)/(tau[i]^2),
+             generate.Ti(4,2)/(tau[i]^2),generate.Ti(4,3)/(tau[i]^2),generate.Ti(4,3)/(tau[i]^2),generate.Ti(4,3)/(tau[i]^2),generate.Ti(4,3)/(tau[i]^2),
+             generate.Ti(4,4)/(tau[i]^2))
+  
+  bi.hat <- list()
+  S.bi <- list()
+  P.Mi.y1 <-  c()
+  left <-c()
+  mid <- c()
+  right <- c()
+  
+  for(k in 1:16){
+    
+    bi.hat[[k]] <-   solve(Ti[[k]] + t(X.1.i[[k]]) %*% X.1.i[[k]]) %*% t(X.1.i[[k]]) %*% y1
+    S.bi[[k]] <- t(y1 - X.1.i[[k]] %*% bi.hat[[k]]) %*%(y1 - X.1.i[[k]] %*% bi.hat[[k]])
+    
+  }
+  
+    for(k in 1:16){
+    
+      left[k] <- (pai/((1 - pai)*tau[i]))^(dim(X.1.i[[k]])[2]-4) 
+      mid[k] <-  ((det(t(X0) %*% X0))^0.5) / (det(Ti[[k]] + t(X.1.i[[k]]) %*% X.1.i[[k]])^0.5 ) 
+      right[k] <-  ( ( S.bi[[k]] + t(bi.hat[[k]]) %*% Ti[[k]] %*% bi.hat[[k]] )/ S.b0 )^(-4.5)
+      P.Mi.y1[k] <- left[k] * mid[k] * right[k]
+    }
+    
+    tau.pdf[i] <- sum(P.Mi.y1)
+}
+
+plot(spline(tau,tau.pdf),type="l",ylim=c(0,5))
+```
+
+4.用新的tau.hat可以算出各個模型適合的機率
+  原先給定的模型機率會最大
+
+
+```{r}
+#use tau.hat replace tau
+tau <- tau[which.max(tau.pdf)]
+
+Ti <- list(generate.Ti(4,0)/(tau^2),generate.Ti(4,1)/(tau^2),generate.Ti(4,1)/(tau^2),generate.Ti(4,1)/(tau^2),generate.Ti(4,1)/(tau^2),
+          generate.Ti(4,2)/(tau^2),generate.Ti(4,2)/(tau^2),generate.Ti(4,2)/(tau^2),generate.Ti(4,2)/(tau^2),generate.Ti(4,2)/(tau^2),
+          generate.Ti(4,2)/(tau^2),generate.Ti(4,3)/(tau^2),generate.Ti(4,3)/(tau^2),generate.Ti(4,3)/(tau^2),generate.Ti(4,3)/(tau^2),
+          generate.Ti(4,4)/(tau^2))
+
+bi.hat <- list()
+
+S.bi <- list()
+
+for(k in 1:16){
+  
+  bi.hat[[k]] <-   solve(Ti[[k]] + t(X.1.i[[k]]) %*% X.1.i[[k]]) %*% t(X.1.i[[k]]) %*% y1
+  S.bi[[k]] <- t(y1 - X.1.i[[k]] %*% bi.hat[[k]]) %*%(y1 - X.1.i[[k]] %*% bi.hat[[k]])
+  
+}
+
+P.Mi.y1 <-  c()
+
+left <- c()
+
+mid <- c()
+
+right <- c()
+
+for(k in 1:16){
+  
+  left[k] <- (pai/((1 - pai)*tau))^(dim(X.1.i[[k]])[2]-4) 
+
+  mid[k] <-  ((det(t(X0) %*% X0))^0.5) / (det(Ti[[k]] + t(X.1.i[[k]]) %*% X.1.i[[k]])^0.5 ) 
+  
+  right[k] <-  ( ( S.bi[[k]] + t(bi.hat[[k]]) %*% Ti[[k]] %*% bi.hat[[k]] )/ S.b0 ) ^(-4.5)  
+  
+  P.Mi.y1[k] <- left[k] * mid[k] * right[k]
+  
+}
+
+
+P.Mi <- c()
+
+for(k in 1:16){
+  
+  P.Mi[k] <- P.Mi.y1[k]/sum(P.Mi.y1)
+  
+}
+round(P.Mi,3)
+
+
+```
+
+5.尋找second stage bayesian D design
+
+```{r}
+#second stage coordinate exchange
+find.D2 <- function(n){
+  X2 <- matrix()
+  m <-  matrix(sample(c(-1,0,1),replace = T,30),10)
+  temp <- compare2(m)
+  X2 <- temp[[1]]
+  D2 <- temp[[2]]
+  
+   for(i in 1:n){
+     if(i%%100 ==0){print(D2)}
+       m <-  matrix(sample(c(-1,0,1),replace = T,30),10)
+       temp <- compare2(m)
+       X <- temp[[1]]
+       D <- temp[[2]]
+         if(D < D2){
+         D2 <- D
+         X2 <- X
+         }
+     }
+   
+  return(list(X2,D2))
+}
+
+find.D2(700)
+```
+
+two stage D-D
+```{r}
+
+A <- matrix(c(-1,1,0,0,1,-1,0,-1,0,1,-1,-1,-1,-1,-1,1,1,1,1,1,-1,-1,1,1,1,-1,-1,1,1,1),10)
+
+D2.value(A)
+
+```
+
+
+
+
+
